@@ -1,0 +1,601 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Personal Expense Manager — Cloud Sync + Neon Hacker</title>
+<style>
+  :root{
+    --bg: #f6f7fb; --card:#fff; --text:#0f172a; --text-2:#64748b; --border:#e5e7eb;
+    --primary:#2563eb; --ok:#059669; --warn:#f59e0b; --bad:#ef4444; --chip:#e0f2fe;
+    --chip-text:#075985;
+  }
+  [data-theme="dark"]{
+    --bg:#0b1020; --card:#111827; --text:#e5e7eb; --text-2:#94a3b8; --border:#1f2937;
+    --primary:#6366f1; --chip:#172554; --chip-text:#93c5fd;
+  }
+  [data-theme="hacker"]{
+    --bg:#000; --card:#0a0f0a; --text:#b7ffb0; --text-2:#9aff87; --border:#093016;
+    --primary:#00ff88; --chip:#022a1b; --chip-text:#39ff14;
+    --glow: 0 0 8px rgba(57,255,20,.45);
+  }
+  *{box-sizing:border-box} body{margin:0;font-family:system-ui,Segoe UI,Roboto,Helvetica,Arial;
+    background:var(--bg); color:var(--text);}
+  .wrap{max-width:1100px;margin:auto;padding:20px}
+  h1{margin:.2rem 0 0;font-size:1.6rem}
+  .muted{color:var(--text-2)}
+  .row{display:flex;gap:12px;flex-wrap:wrap;align-items:center}
+  .spacer{flex:1}
+  .btn{border:1px solid var(--border);background:#fff;color:#111;
+       padding:.55rem .8rem;border-radius:.65rem;cursor:pointer;font-weight:600}
+  [data-theme="dark"] .btn{background:#0f172a;color:#e5e7eb}
+  [data-theme="hacker"] .btn{background:#0f1a12;color:var(--text);border-color:#145f35;box-shadow:var(--glow)}
+  .btn.primary{background:var(--primary);border-color:var(--primary);color:#fff}
+  .btn.ghost{background:transparent}
+  .btn:disabled{opacity:.6;cursor:not-allowed}
+  .pill{padding:.2rem .5rem;border-radius:999px;background:var(--chip);color:var(--chip-text);font-size:.75rem}
+  .card{background:var(--card);border:1px solid var(--border);border-radius:1rem;padding:16px}
+  [data-theme="hacker"] .card{box-shadow:var(--glow)}
+  .grid{display:grid;gap:12px}
+  .g-4{grid-template-columns:repeat(4,minmax(0,1fr))}
+  .g-3{grid-template-columns:repeat(3,minmax(0,1fr))}
+  .g-2{grid-template-columns:repeat(2,minmax(0,1fr))}
+  @media (max-width:960px){.g-4,.g-3{grid-template-columns:1fr}}
+  .stat{font-size:1.3rem;font-weight:800}
+  .tabs{border-bottom:1px solid var(--border);margin:16px 0}
+  .tab{padding:.8rem 1rem;margin:0 .2rem;border:0;background:transparent;color:var(--text-2);cursor:pointer;font-weight:700}
+  .tab.active{color:var(--text);border-bottom:2px solid var(--primary)}
+  .table{width:100%;border-collapse:collapse}
+  .table th,.table td{padding:.55rem .5rem;border-bottom:1px solid var(--border);text-align:left}
+  .table th:last-child,.table td:last-child{text-align:center}
+  input,select,textarea{width:100%;padding:.6rem .7rem;border-radius:.6rem;border:1px solid var(--border);background:transparent;color:var(--text)}
+  label{font-size:.85rem;color:var(--text-2)}
+  .actions{display:flex;gap:6px;justify-content:center}
+  .badge{font-size:.72rem;padding:.15rem .45rem;border-radius:8px;background:#eef2ff;color:#3730a3}
+  .ok{color:var(--ok)} .bad{color:var(--bad)}
+  /* Hacker text glow */
+  [data-theme="hacker"] h1,[data-theme="hacker"] .stat,[data-theme="hacker"] .pill,[data-theme="hacker"] .badge{
+    text-shadow:var(--glow)
+  }
+  /* tiny helper */
+  .sr{font-size:.8rem}
+</style>
+<!-- Google Identity Services (required for Drive sync) -->
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+</head>
+<body data-theme="hacker">
+  <div class="wrap">
+    <!-- Header -->
+    <div class="row">
+      <div>
+        <h1>Personal Expense Manager</h1>
+        <div class="muted sr">Track expenses, manage budgets, sync to Google Drive, and visualize insights.</div>
+      </div>
+      <div class="spacer"></div>
+      <!-- Theme & currency -->
+      <div class="row">
+        <button class="btn" onclick="setTheme('light')">Light</button>
+        <button class="btn" onclick="setTheme('dark')">Dark</button>
+        <button class="btn primary" onclick="setTheme('hacker')">Hacker</button>
+        <select id="currencySel" class="btn" onchange="setCurrency(this.value)">
+          <option value="INR">₹ INR</option>
+          <option value="USD">$ USD</option>
+        </select>
+      </div>
+      <!-- Google auth / sync -->
+      <div class="row">
+        <button id="signinBtn" class="btn primary" onclick="signIn()">Sign in with Google</button>
+        <button id="syncBtn" class="btn" onclick="syncToDrive()" disabled>Sync Now</button>
+        <button id="pullBtn" class="btn" onclick="pullFromDrive()" disabled>Import from Drive</button>
+        <button id="signoutBtn" class="btn" onclick="signOut()" disabled>Sign out</button>
+        <span id="cloudState" class="pill">Offline</span>
+      </div>
+    </div>
+
+    <!-- Stats -->
+    <div class="grid g-4">
+      <div class="card"><div class="muted">Total Expenses</div><div id="statTotal" class="stat">—</div></div>
+      <div class="card"><div class="muted">Budget Set</div><div id="statBudget" class="stat">—</div></div>
+      <div class="card"><div class="muted">Remaining</div><div id="statRemain" class="stat">—</div><div id="remainNote" class="muted sr"></div></div>
+      <div class="card"><div class="muted">Shopping</div><div id="statShop" class="stat">0/0</div></div>
+    </div>
+
+    <!-- Tabs -->
+    <div class="tabs">
+      <button class="tab active" data-tab="expenses" onclick="switchTab('expenses')">Expenses</button>
+      <button class="tab" data-tab="budgets"  onclick="switchTab('budgets')">Budgets</button>
+      <button class="tab" data-tab="shopping" onclick="switchTab('shopping')">Shopping</button>
+      <button class="tab" data-tab="summary"  onclick="switchTab('summary')">Summary</button>
+      <button class="tab" data-tab="settings" onclick="switchTab('settings')">Settings</button>
+    </div>
+
+    <!-- Expenses -->
+    <section id="tab-expenses">
+      <div class="grid g-3">
+        <div class="card">
+          <h3>Add / Edit Expense</h3>
+          <div class="grid g-2" style="margin-top:.6rem">
+            <div>
+              <label>Amount</label>
+              <input id="expAmt" type="number" min="0" step="0.01" />
+            </div>
+            <div>
+              <label>Date</label>
+              <input id="expDate" type="date" />
+            </div>
+            <div>
+              <label>Category</label>
+              <select id="expCat"></select>
+            </div>
+            <div>
+              <label>Description</label>
+              <input id="expDesc" placeholder="What was this for?" />
+            </div>
+          </div>
+          <div class="row" style="margin-top:.7rem">
+            <button class="btn primary" onclick="saveExpense()">Save</button>
+            <button class="btn" onclick="resetExpenseForm()">Clear</button>
+            <button class="btn" onclick="addCustomCategory()">+ Category</button>
+          </div>
+        </div>
+
+        <div class="card" style="grid-column: span 2">
+          <div class="row"><h3 style="margin:0">Expense List</h3><div class="spacer"></div>
+            <input id="searchTxt" placeholder="Search…" oninput="renderExpenses()" style="max-width:260px">
+          </div>
+          <div style="overflow:auto;margin-top:.4rem">
+            <table class="table" id="expTable">
+              <thead><tr><th>Date</th><th>Description</th><th>Category</th><th style="text-align:right">Amount</th><th>Actions</th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Budgets -->
+    <section id="tab-budgets" hidden>
+      <div class="grid g-3">
+        <div class="card">
+          <h3>Set Budget</h3>
+          <div class="grid g-2" style="margin-top:.6rem">
+            <div>
+              <label>Category</label>
+              <select id="budCat"></select>
+            </div>
+            <div>
+              <label>Budget Limit</label>
+              <input id="budLimit" type="number" min="0" step="0.01" />
+            </div>
+          </div>
+          <div class="row" style="margin-top:.7rem">
+            <button class="btn primary" onclick="setBudget()">Save Budget</button>
+          </div>
+        </div>
+        <div class="card" style="grid-column: span 2">
+          <h3 style="margin:0">Budget Overview</h3>
+          <div style="overflow:auto;margin-top:.4rem">
+            <table class="table" id="budTable">
+              <thead><tr><th>Category</th><th style="text-align:right">Budget</th><th style="text-align:right">Spent</th><th style="text-align:right">Remaining</th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Shopping -->
+    <section id="tab-shopping" hidden>
+      <div class="grid g-3">
+        <div class="card">
+          <h3>Add Shopping Item</h3>
+          <div class="row" style="margin-top:.6rem">
+            <input id="shopTxt" placeholder="Add item…" onkeydown="if(event.key==='Enter')addShop()" />
+            <button class="btn primary" onclick="addShop()">Add</button>
+          </div>
+        </div>
+        <div class="card" style="grid-column: span 2">
+          <h3 style="margin:0">Shopping List</h3>
+          <ul id="shopList" style="list-style:none;padding:0;margin:.6rem 0 0;display:grid;gap:8px"></ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- Summary -->
+    <section id="tab-summary" hidden>
+      <div class="grid g-2">
+        <div class="card">
+          <h3 style="margin:0">Expenses by Category</h3>
+          <svg id="pie" viewBox="0 0 220 160" width="100%" height="260"></svg>
+        </div>
+        <div class="card">
+          <h3 style="margin:0">Budget vs Spent</h3>
+          <svg id="bars" viewBox="0 0 320 180" width="100%" height="260"></svg>
+        </div>
+      </div>
+    </section>
+
+    <!-- Settings -->
+    <section id="tab-settings" hidden>
+      <div class="grid g-2">
+        <div class="card">
+          <h3 style="margin:0">Cloud Sync (Google Drive)</h3>
+          <div class="muted sr">Backs up a single JSON file to your Google Drive (app-created files only).</div>
+          <div class="row" style="margin-top:.6rem">
+            <button id="expDriveBtn" class="btn primary" onclick="syncToDrive()" disabled>Export to Drive</button>
+            <button id="impDriveBtn" class="btn" onclick="pullFromDrive()" disabled>Import from Drive</button>
+          </div>
+          <div id="syncMeta" class="muted sr" style="margin-top:.4rem">Last synced: Never</div>
+        </div>
+        <div class="card">
+          <h3 style="margin:0">Local Backup</h3>
+          <div class="row" style="margin-top:.6rem">
+            <button class="btn primary" onclick="exportLocal()">Export (.json)</button>
+            <input id="impFile" type="file" accept="application/json" hidden />
+            <button class="btn" onclick="document.getElementById('impFile').click()">Import (.json)</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+  </div>
+
+<script>
+/* ---------- Minimal State & Helpers ---------- */
+const GOOGLE_CLIENT_ID = "REPLACE_ME.apps.googleusercontent.com"; // TODO replace
+const DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.file";
+const DRIVE_API = "https://www.googleapis.com/drive/v3";
+const DRIVE_UPLOAD = "https://www.googleapis.com/upload/drive/v3";
+const BACKUP_FILENAME = "expense_manager_backup.json";
+
+const CATEGORIES_BASE = ["Food","Transportation","Entertainment","Utilities","Healthcare","Shopping","Groceries","Other"];
+let state = {
+  expenses: JSON.parse(localStorage.getItem("expenses")||"[]"),
+  budgets: JSON.parse(localStorage.getItem("budgets")||"[]"),
+  shopping: JSON.parse(localStorage.getItem("shopping")||"[]"),
+  customCategories: JSON.parse(localStorage.getItem("customCategories")||"[]"),
+  currency: localStorage.getItem("currency") || "INR",
+  theme: localStorage.getItem("theme") || "hacker",
+  lastSyncedAt: localStorage.getItem("lastSyncedAt") || null,
+};
+let editingId = null;
+let accessToken = null;
+let tokenClient = null;
+
+function saveLS(){
+  localStorage.setItem("expenses", JSON.stringify(state.expenses));
+  localStorage.setItem("budgets", JSON.stringify(state.budgets));
+  localStorage.setItem("shopping", JSON.stringify(state.shopping));
+  localStorage.setItem("customCategories", JSON.stringify(state.customCategories));
+  localStorage.setItem("currency", state.currency);
+  localStorage.setItem("theme", state.theme);
+  if(state.lastSyncedAt) localStorage.setItem("lastSyncedAt", state.lastSyncedAt);
+}
+function fmt(n){ try{ return new Intl.NumberFormat("en-US",{style:"currency",currency:state.currency,minimumFractionDigits:2}).format(+n||0);}catch{ return (+n||0).toFixed(2); } }
+function allCategories(){ return [...CATEGORIES_BASE, ...state.customCategories]; }
+function byId(id){ return document.getElementById(id); }
+function setTheme(t){ state.theme=t; document.body.setAttribute("data-theme",t); saveLS(); }
+function setCurrency(c){ state.currency=c; byId("currencySel").value=c; saveLS(); renderAll(); }
+function today(){ return new Date().toISOString().slice(0,10); }
+
+/* ---------- Google OAuth (GIS) ---------- */
+function initGIS(){
+  if(!window.google) return;
+  tokenClient = google.accounts.oauth2.initTokenClient({
+    client_id: GOOGLE_CLIENT_ID,
+    scope: DRIVE_SCOPE,
+    callback: (resp) => {
+      if(resp && resp.access_token){ accessToken = resp.access_token; updateCloudUI(true); autoSync(); }
+    }
+  });
+}
+function signIn(){ tokenClient?.requestAccessToken({prompt:"consent"}); }
+function signOut(){ accessToken=null; updateCloudUI(false); }
+
+async function driveFindBackup(){
+  const q = encodeURIComponent(`name='${BACKUP_FILENAME}' and trashed=false`);
+  const r = await fetch(`${DRIVE_API}/files?q=${q}&fields=files(id,name)`, {headers:{Authorization:`Bearer ${accessToken}`}});
+  const j = await r.json(); return j?.files?.[0]?.id||null;
+}
+async function driveDownload(fileId){
+  const r = await fetch(`${DRIVE_API}/files/${fileId}?alt=media`, {headers:{Authorization:`Bearer ${accessToken}`}});
+  if(!r.ok) throw new Error("Download failed"); return r.json();
+}
+async function driveUpload(blob, fileId){
+  const meta = {name:BACKUP_FILENAME, mimeType:"application/json"};
+  const boundary = "----pmx" + Math.random().toString(16).slice(2);
+  const body = [
+    `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n`,
+    JSON.stringify(meta), "\r\n",
+    `--${boundary}\r\nContent-Type: application/json\r\n\r\n`,
+    JSON.stringify(blob), "\r\n",
+    `--${boundary}--`
+  ].join("");
+  const url = fileId ? `${DRIVE_UPLOAD}/files/${fileId}?uploadType=multipart` : `${DRIVE_UPLOAD}/files?uploadType=multipart`;
+  const r = await fetch(url,{method:fileId?"PATCH":"POST",headers:{Authorization:`Bearer ${accessToken}`,"Content-Type":`multipart/related; boundary=${boundary}`},body});
+  if(!r.ok) throw new Error("Upload failed"); return r.json();
+}
+function backupBlob(){ return {version:1,updatedAt:new Date().toISOString(),payload:{...state}}; }
+
+async function syncToDrive(){
+  if(!accessToken) return;
+  toggleSyncButtons(true);
+  try{
+    const id = await driveFindBackup();
+    await driveUpload(backupBlob(), id);
+    state.lastSyncedAt = new Date().toISOString(); saveLS(); updateSyncMeta();
+  }catch(e){ alert("Sync failed: " + (e?.message||e)); }
+  toggleSyncButtons(false);
+}
+async function pullFromDrive(){
+  if(!accessToken) return;
+  toggleSyncButtons(true);
+  try{
+    const id = await driveFindBackup();
+    if(!id) throw new Error("No backup found in Drive");
+    const blob = await driveDownload(id);
+    if(blob?.payload){
+      state = {...state, ...blob.payload};
+      saveLS(); hydrateForms(); renderAll();
+      state.lastSyncedAt = new Date().toISOString(); saveLS(); updateSyncMeta();
+    }else throw new Error("Invalid backup file");
+  }catch(e){ alert("Import failed: " + (e?.message||e)); }
+  toggleSyncButtons(false);
+}
+function autoSync(){ // simple debounce for first load
+  setTimeout(() => syncToDrive().catch(()=>{}), 600);
+}
+function updateCloudUI(connected){
+  byId("signinBtn").disabled = connected;
+  byId("syncBtn").disabled = !connected;
+  byId("pullBtn").disabled = !connected;
+  byId("signoutBtn").disabled = !connected;
+  byId("expDriveBtn").disabled = !connected;
+  byId("impDriveBtn").disabled = !connected;
+  byId("cloudState").textContent = connected ? "Connected" : "Offline";
+}
+
+/* ---------- Tabs ---------- */
+function switchTab(name){
+  document.querySelectorAll(".tab").forEach(t=>t.classList.toggle("active", t.dataset.tab===name));
+  ["expenses","budgets","shopping","summary","settings"].forEach(id=>{
+    byId("tab-"+id).hidden = id!==name;
+  });
+  if(name==="summary") drawCharts();
+}
+
+/* ---------- Expenses ---------- */
+function hydrateForms(){
+  byId("currencySel").value = state.currency;
+  // dates
+  byId("expDate").value = today();
+  // categories
+  const cats = allCategories();
+  const expCat = byId("expCat"); expCat.innerHTML = cats.map(c=>`<option>${c}</option>`).join("");
+  const budCat = byId("budCat"); budCat.innerHTML = cats.map(c=>`<option>${c}</option>`).join("");
+}
+function resetExpenseForm(){ editingId=null; byId("expAmt").value=""; byId("expDesc").value=""; byId("expDate").value=today(); byId("expCat").value=allCategories()[0]||"Other"; }
+function saveExpense(){
+  const amount = parseFloat(byId("expAmt").value)||0;
+  const desc = (byId("expDesc").value||"").trim();
+  const date = byId("expDate").value || today();
+  const category = byId("expCat").value || "Other";
+  if(amount<=0 || !desc) return alert("Enter valid amount and description.");
+  if(editingId){
+    const i = state.expenses.findIndex(e=>e.id===editingId);
+    if(i>-1) state.expenses[i] = {id:editingId, amount, description:desc, date, category};
+  }else{
+    state.expenses.push({id: Date.now().toString(), amount, description:desc, date, category});
+  }
+  saveLS(); resetExpenseForm(); renderAll();
+}
+function editExpense(id){
+  const e = state.expenses.find(x=>x.id===id); if(!e) return;
+  editingId = id;
+  byId("expAmt").value = e.amount;
+  byId("expDesc").value = e.description;
+  byId("expDate").value = e.date;
+  byId("expCat").value = e.category;
+}
+function delExpense(id){
+  if(!confirm("Delete this expense?")) return;
+  state.expenses = state.expenses.filter(x=>x.id!==id);
+  saveLS(); renderAll();
+}
+function addCustomCategory(){
+  const v = prompt("New category name?");
+  if(v && !allCategories().includes(v)){
+    state.customCategories.push(v); saveLS(); hydrateForms(); renderAll();
+  }
+}
+function renderExpenses(){
+  const q = (byId("searchTxt").value||"").toLowerCase();
+  const tbody = byId("expTable").querySelector("tbody"); tbody.innerHTML="";
+  [...state.expenses].sort((a,b)=>b.id.localeCompare(a.id)).filter(e=>{
+    return !q || e.description.toLowerCase().includes(q) || e.category.toLowerCase().includes(q);
+  }).forEach(e=>{
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td>${e.date}</td>
+      <td>${e.description}</td>
+      <td><span class="badge">${e.category}</span></td>
+      <td style="text-align:right">${fmt(e.amount)}</td>
+      <td class="actions">
+        <button class="btn" onclick="editExpense('${e.id}')">Edit</button>
+        <button class="btn" onclick="delExpense('${e.id}')">Delete</button>
+      </td>`;
+    tbody.appendChild(tr);
+  });
+}
+
+/* ---------- Budgets ---------- */
+function setBudget(){
+  const category = byId("budCat").value;
+  const limit = parseFloat(byId("budLimit").value)||0;
+  if(!category || limit<=0) return alert("Pick category and set a valid limit.");
+  const i = state.budgets.findIndex(b=>b.category===category);
+  if(i>-1) state.budgets[i].limit = limit;
+  else state.budgets.push({category, limit, spent:0});
+  saveLS(); renderAll();
+}
+function recomputeSpent(){
+  const totals = {};
+  state.expenses.forEach(e=>{ totals[e.category]=(totals[e.category]||0)+(+e.amount||0); });
+  state.budgets = state.budgets.map(b=>({ ...b, spent: totals[b.category]||0 }));
+}
+function renderBudgets(){
+  recomputeSpent();
+  const tbody = byId("budTable").querySelector("tbody"); tbody.innerHTML="";
+  state.budgets.filter(b=>b.limit>0).forEach(b=>{
+    const remaining = b.limit - (b.spent||0);
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td><span class="badge">${b.category}</span></td>
+      <td style="text-align:right">${fmt(b.limit)}</td>
+      <td style="text-align:right">${fmt(b.spent||0)}</td>
+      <td style="text-align:right" class="${remaining<0?'bad':'ok'}">${fmt(Math.abs(remaining))} ${remaining<0?'over':'left'}</td>`;
+    tbody.appendChild(tr);
+  });
+}
+
+/* ---------- Shopping ---------- */
+function addShop(){
+  const txt = (byId("shopTxt").value||"").trim();
+  if(!txt) return;
+  state.shopping.push({id:Date.now().toString(),name:txt,done:false});
+  byId("shopTxt").value=""; saveLS(); renderShopping();
+}
+function toggleShop(id){
+  const i = state.shopping.findIndex(x=>x.id===id);
+  if(i>-1){ state.shopping[i].done = !state.shopping[i].done; saveLS(); renderShopping(); }
+}
+function delShop(id){
+  state.shopping = state.shopping.filter(x=>x.id!==id); saveLS(); renderShopping();
+}
+function renderShopping(){
+  const ul = byId("shopList"); ul.innerHTML="";
+  state.shopping.forEach(it=>{
+    const li = document.createElement("li");
+    li.className="card"; li.style.display="flex"; li.style.alignItems="center"; li.style.justifyContent="space-between";
+    li.innerHTML = `
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+        <input type="checkbox" ${it.done?'checked':''} onchange="toggleShop('${it.id}')">
+        <span style="${it.done?'text-decoration:line-through;opacity:.7':''}">${it.name}</span>
+      </label>
+      <div class="row">
+        <button class="btn" onclick="delShop('${it.id}')">Delete</button>
+      </div>`;
+    ul.appendChild(li);
+  });
+}
+
+/* ---------- Summary & Stats ---------- */
+function totals(){
+  const totalExp = state.expenses.reduce((s,e)=>s+(+e.amount||0),0);
+  const totalBud = state.budgets.reduce((s,b)=>s+(+b.limit||0),0);
+  const remain = totalBud - totalExp;
+  const done = state.shopping.filter(x=>x.done).length;
+  return {totalExp,totalBud,remain,done,items:state.shopping.length};
+}
+function updateStats(){
+  const t = totals();
+  byId("statTotal").textContent = fmt(t.totalExp);
+  byId("statBudget").textContent = fmt(t.totalBud);
+  byId("statRemain").textContent = fmt(t.remain);
+  byId("remainNote").textContent = t.remain>=0 ? "Under budget" : "Over budget";
+  byId("statShop").textContent = `${t.done}/${t.items}`;
+}
+function catBreakdown(){
+  const map = new Map();
+  state.expenses.forEach(e=>map.set(e.category,(map.get(e.category)||0)+(+e.amount||0)));
+  return [...map.entries()].map(([name,value])=>({name,value}));
+}
+function drawPie(){
+  const svg = byId("pie"); svg.innerHTML="";
+  const data = catBreakdown().filter(d=>d.value>0);
+  if(!data.length){ svg.innerHTML = `<text x="110" y="90" text-anchor="middle" fill="var(--text-2)">No data</text>`; return; }
+  const total = data.reduce((s,d)=>s+d.value,0);
+  let a0 = -Math.PI/2, cx=80, cy=80, r=60, legendX=160, legendY=20;
+  data.forEach((d,i)=>{
+    const a1 = a0 + (d.value/total)*Math.PI*2;
+    const p0=[cx+r*Math.cos(a0), cy+r*Math.sin(a0)];
+    const p1=[cx+r*Math.cos(a1), cy+r*Math.sin(a1)];
+    const large = (a1-a0)>Math.PI?1:0;
+    const path = `M ${cx} ${cy} L ${p0[0]} ${p0[1]} A ${r} ${r} 0 ${large} 1 ${p1[0]} ${p1[1]} Z`;
+    const color = pieColor(i);
+    svg.insertAdjacentHTML("beforeend", `<path d="${path}" fill="${color}" stroke="var(--border)"></path>`);
+    // legend
+    svg.insertAdjacentHTML("beforeend", `<rect x="${legendX}" y="${legendY+i*20}" width="12" height="12" fill="${color}"></rect>
+      <text x="${legendX+18}" y="${legendY+11+i*20}" font-size="11" fill="var(--text)">${d.name} (${((d.value/total)*100).toFixed(0)}%)</text>`);
+    a1 && (a0=a1);
+  });
+}
+function drawBars(){
+  const svg = byId("bars"); svg.innerHTML="";
+  recomputeSpent();
+  const data = state.budgets.filter(b=>b.limit>0);
+  if(!data.length){ svg.innerHTML = `<text x="160" y="90" text-anchor="middle" fill="var(--text-2)">No data</text>`; return; }
+  const W=320,H=180,pad=30, bw= Math.max(10, (W-2*pad)/data.length - 10), maxV=Math.max(...data.map(d=>Math.max(d.limit,d.spent)));
+  // axes
+  svg.insertAdjacentHTML("beforeend", `<line x1="${pad}" y1="${H-pad}" x2="${W-pad}" y2="${H-pad}" stroke="var(--text-2)"></line>
+                                       <line x1="${pad}" y1="${pad}" x2="${pad}" y2="${H-pad}" stroke="var(--text-2)"></line>`);
+  data.forEach((d,i)=>{
+    const x = pad + i*(bw+10)+5;
+    const hb = (d.limit/maxV)*(H-2*pad);
+    const hs = (d.spent/maxV)*(H-2*pad);
+    const yb = H-pad-hb, ys = H-pad-hs;
+    const colB = "var(--primary)"; const colS = "var(--ok)";
+    svg.insertAdjacentHTML("beforeend", `<rect x="${x}" y="${yb}" width="${bw}" height="${hb}" fill="${colB}" opacity=".85"></rect>`);
+    svg.insertAdjacentHTML("beforeend", `<rect x="${x+bw*0.15}" y="${ys}" width="${bw*0.7}" height="${hs}" fill="${colS}" opacity=".85"></rect>`);
+    // labels
+    const labelY = H - pad + 12;
+    svg.insertAdjacentHTML("beforeend", `<text x="${x+bw/2}" y="${labelY}" font-size="10" text-anchor="middle" fill="var(--text)">${d.category}</text>`);
+  });
+}
+function pieColor(i){
+  const hacker = ["#39FF14","#00FF88","#99FF00","#66FF00","#33FF00","#00FFCC","#00FF66","#00FF33"];
+  const dark = ["#6366F1","#10B981","#F59E0B","#EF4444","#8B5CF6","#EC4899","#06B6D4","#84CC16"];
+  const light= ["#3B82F6","#10B981","#F59E0B","#EF4444","#8B5CF6","#EC4899","#06B6D4","#84CC16"];
+  const arr = document.body.getAttribute("data-theme")==="hacker" ? hacker :
+              document.body.getAttribute("data-theme")==="dark"   ? dark   : light;
+  return arr[i % arr.length];
+}
+function drawCharts(){ drawPie(); drawBars(); }
+
+/* ---------- Local Import/Export ---------- */
+function exportLocal(){
+  const blob = new Blob([JSON.stringify({version:1,updatedAt:new Date().toISOString(),payload:state},null,2)],{type:"application/json"});
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `expense-manager-${new Date().toISOString().slice(0,10)}.json`;
+  document.body.appendChild(a); a.click(); a.remove();
+}
+byId("impFile").addEventListener("change", async (e)=>{
+  const f = e.target.files[0]; if(!f) return;
+  try{ const text = await f.text(); const j = JSON.parse(text); if(j?.payload){ state = {...state, ...j.payload}; saveLS(); hydrateForms(); renderAll(); } else throw 0; }
+  catch{ alert("Invalid backup file."); }
+  e.target.value="";
+});
+
+/* ---------- UI Glue ---------- */
+function updateSyncMeta(){
+  byId("syncMeta").textContent = "Last synced: " + (state.lastSyncedAt ? new Date(state.lastSyncedAt).toLocaleString() : "Never");
+}
+function toggleSyncButtons(busy){
+  ["syncBtn","pullBtn","expDriveBtn","impDriveBtn"].forEach(id=>byId(id).disabled = busy || !accessToken);
+}
+function renderAll(){
+  hydrateForms(); renderExpenses(); renderBudgets(); renderShopping(); updateStats(); drawCharts(); updateSyncMeta();
+}
+
+/* ---------- Boot ---------- */
+window.addEventListener("load", ()=>{
+  setTheme(state.theme); setCurrency(state.currency); hydrateForms(); renderAll();
+  // Prefill budgets with base categories if empty
+  if(!state.budgets.length){ state.budgets = CATEGORIES_BASE.map(c=>({category:c,limit:0,spent:0})); saveLS(); }
+  // GIS may not be ready yet; poll briefly
+  const t = setInterval(()=>{ if(window.google){ initGIS(); clearInterval(t); } }, 200);
+});
+</script>
+</body>
+</html>
